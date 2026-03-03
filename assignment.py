@@ -18,3 +18,6 @@ print(f'The number of columns: {len(data.columns)}')
 print(f'The number of lipoma: {(data["label"] == "lipoma").sum()}')
 #number of liposarcoma, column 2 = liposarcoma
 print(f'The number of liposarcoma: {(data["label"] == "liposarcoma").sum()}')
+
+#number of missing values
+print(f'The number of missing values: {data.isnull().sum().sum()}')
