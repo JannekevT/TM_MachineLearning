@@ -9,7 +9,17 @@ from worclipo.load_data import load_data
 #from hn.load_data import load_data
 #from ecg.load_data import load_data
 from sklearn.model_selection import train_test_split
+# General packages
+import numpy as np
+import pandas as pd
 import matplotlib.pyplot as plt
+from sklearn import datasets as ds
+import seaborn
+
+# Classifiers
+from sklearn import model_selection
+from sklearn import metrics
+
 
 data = load_data()
 print(f'The number of samples: {len(data.index)}')
@@ -25,7 +35,6 @@ print(f'The number of liposarcoma: {(data["label"] == "liposarcoma").sum()}')
 print("Number of total missing values:", data.isnull().sum().sum())
 print("Number of feature missing values:", data.iloc[:, 2:].isnull().sum().sum())
 
-#%%
 #split data into train and test sets
 x = data.drop(["label"], axis='columns').values
 y = data["label"].map({'lipoma':0, 'liposarcoma':1})
@@ -47,5 +56,4 @@ ax = fig.add_subplot(133)
 ax.set_title("Test data", fontsize='small')
 ax.scatter(x_test[:, 0], x_test[:, 1], marker='o', c=y_test,
            s=25, edgecolor='k', cmap=plt.cm.Paired)
- 
-# %%
+
