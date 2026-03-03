@@ -20,4 +20,5 @@ print(f'The number of lipoma: {(data["label"] == "lipoma").sum()}')
 print(f'The number of liposarcoma: {(data["label"] == "liposarcoma").sum()}')
 
 #number of missing values
-print(f'The number of missing values: {data.isnull().sum().sum()}')
+print("Number of total missing values:", data.isnull().sum().sum())
+print("Number of feature missing values:", data.iloc[:, 2:].isnull().sum().sum())
