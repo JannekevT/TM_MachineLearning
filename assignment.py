@@ -4,7 +4,7 @@
 
 #%% Data loading functions. Uncomment the one you want to use
 #from worcgist.load_data import load_data
-#from worclipo.load_data import load_data
+from worclipo.load_data import load_data
 #from worcliver.load_data import load_data
 #from hn.load_data import load_data
 #from ecg.load_data import load_data
@@ -13,3 +13,8 @@ data = load_data()
 print(f'The number of samples: {len(data.index)}')
 
 print(f'The number of columns: {len(data.columns)}')
+
+#number of lipoma, column 2 = lipoma
+print(f'The number of lipoma: {(data["label"] == "lipoma").sum()}')
+#number of liposarcoma, column 2 = liposarcoma
+print(f'The number of liposarcoma: {(data["label"] == "liposarcoma").sum()}')
