@@ -3,19 +3,13 @@
 # RobustScaler is minder gevoelig voor outliers, maar we willen ze nog steeds verwijderen
 
 
+#%%
 from worclipo.load_data import load_data
 from sklearn.model_selection import train_test_split
-
 
 # General packages
 import numpy as np
 import pandas as pd
-import matplotlib.pyplot as plt
-from sklearn import datasets as ds
-import seaborn as sns
-from sklearn import metrics
-from sklearn.model_selection import cross_validate, StratifiedKFold
-from sklearn.feature_selection import SelectKBest, f_classif, VarianceThreshold
 from sklearn.feature_selection import VarianceThreshold
 from sklearn.preprocessing import MinMaxScaler
 from sklearn.preprocessing import RobustScaler
