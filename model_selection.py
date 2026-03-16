@@ -9,7 +9,7 @@ import matplotlib.pyplot as plt
 from sklearn import datasets as ds
 import seaborn
 from sklearn import metrics
-from sklearn.model_selection import cross_validate, StratifiedKFold
+from sklearn.model_selection import cross_validate, StratifiedKFold, GridSearchCV
 from sklearn.feature_selection import SelectKBest, f_classif, VarianceThreshold
 
 # Classifiers
@@ -69,7 +69,7 @@ scoring = {
     'recall': metrics.make_scorer(metrics.recall_score)
 }
 
-# %%
+# %% Without Feature Selection
 for clf in clsfs:
     cv = StratifiedKFold(n_splits=5)
     
@@ -88,7 +88,7 @@ for clf in clsfs:
         print(f"{metric.split('test_'[1].title())}: {mean:.3f} +- {std:.3f}")
     print(" ")
 
-# %%
+# %% With Feature Selection
 for clf in clsfs:
     cv = StratifiedKFold(n_splits=5)
     
@@ -106,4 +106,29 @@ for clf in clsfs:
         std = cv_results[metric].std()
         print(f"{metric.split('test_'[1].title())}: {mean:.3f} +- {std:.3f}")
     print(" ")
-# %%
+# %% Nested Cross-validation loop
+
+parameters_grid = {}
+N_trials = 20
+nested_scores = np.zeros(N_trials)
+
+for clf in clsfs:
+    for i in range(N_trials):
+        inner_cv = StratifiedKFold(n_splits=5)
+        outer_cv = StratifiedKFold(n_splits=5)
+
+        classifier = GridSearchCV(estimator=clf, param_grid=parameters_grid, cv=inner_cv)
+        nested_scores = cross_validate(
+            classifier, x_fs_train, y_fs_train,
+            cv=outer_cv,
+            scoring=scoring,
+            return_train_score=False,
+            n_jobs=-1
+        )
+
+        print(type(clf).__name__)
+        for metric in ['test_accuracy', 'test_auc', 'test_f1', 'test_precision', 'test_recall']:
+            mean = nested_scores[metric].mean()
+            std = nested_scores[metric].std()
+            print(f"{metric.split('test_'[1].title())}: {mean:.3f} +- {std:.3f}")
+        print(" ")
