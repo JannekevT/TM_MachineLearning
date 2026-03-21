@@ -6,10 +6,10 @@ from sklearn.model_selection import train_test_split
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
-from sklearn import datasets as ds
 import seaborn
 from sklearn import metrics
-from sklearn.model_selection import cross_validate, StratifiedKFold, GridSearchCV
+from sklearn.pipeline import Pipeline
+from sklearn.model_selection import cross_validate, StratifiedKFold, RandomizedSearchCV
 from sklearn.feature_selection import SelectKBest, f_classif, VarianceThreshold
 
 # Classifiers
@@ -22,6 +22,7 @@ from sklearn.svm import SVC, NuSVC
 from sklearn.tree import DecisionTreeClassifier
 from sklearn.neighbors import KNeighborsClassifier
 from sklearn.ensemble import GradientBoostingClassifier, RandomForestClassifier, AdaBoostClassifier
+
 #%%
 data = load_data()
 x = data.drop(["label"], axis='columns').values
@@ -106,9 +107,10 @@ for clf in clsfs:
         std = cv_results[metric].std()
         print(f"{metric.split('test_'[1].title())}: {mean:.3f} +- {std:.3f}")
     print(" ")
+
 # %% Nested Cross-validation loop
 
-parameters_grid = {}
+parameters_dist = {}
 N_trials = 20
 nested_scores = np.zeros(N_trials)
 
@@ -117,7 +119,7 @@ for clf in clsfs:
         inner_cv = StratifiedKFold(n_splits=5)
         outer_cv = StratifiedKFold(n_splits=5)
 
-        classifier = GridSearchCV(estimator=clf, param_grid=parameters_grid, cv=inner_cv)
+        classifier = RandomizedSearchCV(estimator=clf, param_distributions=parameters_dist, cv=inner_cv)
         nested_scores = cross_validate(
             classifier, x_fs_train, y_fs_train,
             cv=outer_cv,
