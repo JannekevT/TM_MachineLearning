@@ -11,6 +11,7 @@ from sklearn.preprocessing import RobustScaler
 from sklearn.neighbors import KNeighborsClassifier
 from sklearn.ensemble import GradientBoostingClassifier, RandomForestClassifier
 from sklearn.linear_model import LogisticRegression
+from sklearn.tree import DecisionTreeClassifier
 from worclipo.load_data import load_data
 
 #%% Loading the data and separating the test set from the train set
@@ -109,27 +110,39 @@ all_fs_options = kbest_options + pca_options + ['passthrough'] #+lasso_options #
 clfs = [
     RandomForestClassifier(),
     GradientBoostingClassifier(),
-    KNeighborsClassifier()
+    DecisionTreeClassifier(),
+    LogisticRegression(max_iter=10000, tol=1e-3)
 ]
 
 param_grids = {
     RandomForestClassifier: {
         'fs': all_fs_options,
-        'clf__n_estimators': randint(50, 200),
-        'clf__max_depth': randint(2, 6),
-        'clf__min_samples_split': randint(5, 20),
+        'clf__n_estimators': randint(50, 150),      # Standard=100
+        'clf__max_depth': randint(2, 6),            # Standard=None
+        'clf__min_samples_split': randint(8, 20),   # Standard=2
+        'clf__min_samples_leaf' : randint(3, 10),    # Standard=1
+        'clf__max_features': ['sqrt', 'log2']    
     },
     GradientBoostingClassifier: {
         'fs': all_fs_options,
-        'clf__n_estimators': randint(50, 200),
-        'clf__learning_rate': loguniform(0.01, 0.2),
+        'clf__n_estimators': randint(100, 200),
+        'clf__learning_rate': loguniform(0.01, 0.05),
         'clf__max_depth': randint(2, 6),
+        'clf__subsample': [0.5, 0.6, 0.7, 0.8, 0.9, 1.0],               #standard=1, can only accept 1 decimal numbers, so this acts as rand(0.5, 1)
+        'clf__min_samples_leaf': randint(2, 5)
     },
-    KNeighborsClassifier: {
+    DecisionTreeClassifier: {
         'fs': all_fs_options,
-        'clf__n_neighbors': randint(3, 20),
-        'clf__weights': ['uniform', 'distance'],
-    },
+        'clf__max_depth': randint(2, 5),             #Standard=None
+        'clf__min_samples_split': randint(8, 20),
+        'clf__min_samples_leaf': randint(5, 12),        #standard=1
+        'clf__criterion': ['gini', 'entropy']
+    },  
+    LogisticRegression: {
+        'fs': all_fs_options,
+        'clf__C': loguniform(0.1, 10),             # Standard=1
+        'clf__solver': ['saga']
+    }
 }
 
 #%%
@@ -143,6 +156,7 @@ scoring = {
 }
 
 results = {}
+fitted_searches = {}
 
 for clf in clfs:
     clf_type = type(clf)
@@ -175,7 +189,13 @@ for clf in clfs:
     )
 
     results[clf_type.__name__] = cv_results
+
+    search.fit(x_train_final, y_train)
+    fitted_searches[clf_type.__name__] = search
+
     print(clf_type.__name__)
+    print(f"  Best inner CV AUC: {search.best_score_:.3f}")
+    print(f"  Best params: {search.best_params_}")
     for metric in ['test_accuracy', 'test_auc', 'test_f1', 'test_precision', 'test_recall']:
         mean = cv_results[metric].mean()
         std = cv_results[metric].std()
@@ -183,7 +203,7 @@ for clf in clfs:
     print()
 
 #%% Final model training
-final_clf = # Best performing model
+final_clf = DecisionTreeClassifier()# Best performing model
 final_clf_type = type(final_clf)
 
 final_pipe = Pipeline([
@@ -196,7 +216,7 @@ final_inner_cv = StratifiedKFold(n_splits=5, shuffle=True, random_state=42)
 final_search = RandomizedSearchCV(
     estimator=final_pipe,
     param_distributions=param_grids[final_clf_type],
-    n_iter=40,
+    n_iter=100,
     cv=final_inner_cv,
     scoring='roc_auc',
     refit=True,             # fits best model on full x_train_final after search
@@ -207,9 +227,9 @@ final_search = RandomizedSearchCV(
 # Fit on ALL training data
 final_search.fit(x_train_final, y_train)
 print("Best params:", final_search.best_params_)
-print("Best inner CV AUC:", final_search.best_score_)
+print("Final model AUC with best parameters:", final_search.best_score_)
 
-#%% Final evaluation on test set
+#%% Final evaluation on test set (only run once!)
 y_pred = final_search.predict(x_test_final)
 y_prob = final_search.predict_proba(x_test_final)[:,1] # Output is 2 columns, this selects only the column "prob_class_1", not class 0
 
