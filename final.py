@@ -5,7 +5,7 @@ from scipy.stats import loguniform, randint
 from sklearn import metrics
 from sklearn.decomposition import PCA
 from sklearn.pipeline import Pipeline
-from sklearn.model_selection import cross_validate, StratifiedKFold, RandomizedSearchCV, train_test_split
+from sklearn.model_selection import cross_validate, StratifiedKFold, RandomizedSearchCV, train_test_split, RepeatedStratifiedKFold
 from sklearn.feature_selection import SelectKBest, f_classif, VarianceThreshold, SelectFromModel
 from sklearn.preprocessing import RobustScaler
 from sklearn.neighbors import KNeighborsClassifier
@@ -74,37 +74,20 @@ print(f"Preprocessing and VarianceThreshold completed: {len(selected_features)} 
 #%% Search Preparation
 
 rng = np.random.RandomState(42) # fixed seed for reproducability
-n_fs_samples = 20 # how many random feature selectors to generate per type
+n_fs_samples = 10 # how many random feature selectors to generate per type
 n_features = x_train_final.shape[1]
 
 # T-test feature selection
-k_min = int(0.01 * n_features) # Lower bound, 
-k_max = int(0.15 * n_features) # Upper bound, rule of thumb is n_features < n_samples / 10
+k_min = int(2) # Lower bound 
+k_max = int(20) # Upper bound, rule of thumb is n_features < n_samples / 10 --> 12 or sqrt(115)=11
 k_samples = rng.randint(k_min, k_max, size=n_fs_samples) # randomly generate k values within defined range (random search)
 kbest_options = [SelectKBest(f_classif, k=int(k)) for k in k_samples] # f_classif = T-test, loop for different k's, randomized search
 
-# LASSO feature selection
-c_samples = loguniform.rvs(1000, 100000, size=n_fs_samples, random_state=rng) # Because LASSO reciproke works logarithmic, loguniform is needed to equally distribute random generated c's over the whole range
-lasso_options = [
-    SelectFromModel(
-        LogisticRegression( # l1_ratio=1.0 makes l1 penalty: sets feature weights to 0, max_iterations to perform well, solver saga because 0<=c<=1. Max iterations to allow convergence, tolerance also helps
-            solver='saga', 
-            l1_ratio=1.0, 
-            C=float(c), 
-            max_iter=5000, 
-            tol=1e-3
-            ),
-            max_features=max(1, int(0.1 * n_features))  # always select at least 10% of features (otherwise, LogReg sets all features to zero)
-
-    )
-    for c in c_samples
-    ]
-
 # PCA
-n_components_samples = rng.randint(2, 50, size=n_fs_samples)
+n_components_samples = rng.randint(2, 20, size=n_fs_samples)
 pca_options = [PCA(n_components=int(n)) for n in n_components_samples]
 
-all_fs_options = kbest_options + pca_options + ['passthrough'] #+lasso_options # pass-through makes no extra feature selection, only variance threshold of preprocessing is applied
+all_fs_options = kbest_options + pca_options + ['passthrough'] # pass-through makes no extra feature selection, only variance threshold of preprocessing is applied
 
 
 clfs = [
@@ -120,13 +103,13 @@ param_grids = {
         'clf__n_estimators': randint(50, 150),      # Standard=100
         'clf__max_depth': randint(2, 6),            # Standard=None
         'clf__min_samples_split': randint(8, 20),   # Standard=2
-        'clf__min_samples_leaf' : randint(3, 10),    # Standard=1
+        'clf__min_samples_leaf' : randint(3, 10),   # Standard=1
         'clf__max_features': ['sqrt', 'log2']    
     },
     GradientBoostingClassifier: {
         'fs': all_fs_options,
-        'clf__n_estimators': randint(100, 200),
-        'clf__learning_rate': loguniform(0.01, 0.05),
+        'clf__n_estimators': randint(100, 250),
+        'clf__learning_rate': loguniform(0.001, 0.05),
         'clf__max_depth': randint(2, 6),
         'clf__subsample': [0.5, 0.6, 0.7, 0.8, 0.9, 1.0],               #standard=1, can only accept 1 decimal numbers, so this acts as rand(0.5, 1)
         'clf__min_samples_leaf': randint(2, 5)
@@ -167,17 +150,17 @@ for clf in clfs:
         ('clf', clf)
     ])
 
-    inner_cv = StratifiedKFold(n_splits=5, shuffle=True, random_state=42) # 5-fold, shuffles the order of the data before splitting, with reproducability
+    inner_cv = RepeatedStratifiedKFold(n_splits=5, n_repeats=3, random_state=42) # 5-fold repeated 3 times (less overfitting), shuffles the order of the data before splitting, with reproducability
     outer_cv = StratifiedKFold(n_splits=5, shuffle=True, random_state=42) 
 
     search = RandomizedSearchCV(
         estimator=pipe,
         param_distributions=param_grid,
         n_iter=100, # Nr. of times repeated
-        cv=inner_cv,
+        cv=inner_cv, 
         scoring='roc_auc', # roc_auc is the most complete metric, which includes both specificity and sensitivity, making it the best for hyperparameter optimalization
         random_state=42,
-        error_score=0 # if LASSO produces 0 features, score 0 rather than crash
+        error_score=0 # if LogReg produces 0 features, score 0 rather than crash
     )
 
     cv_results = cross_validate(
@@ -203,7 +186,7 @@ for clf in clfs:
     print()
 
 #%% Final model training
-final_clf = DecisionTreeClassifier()# Best performing model
+final_clf = GradientBoostingClassifier()# Best performing model
 final_clf_type = type(final_clf)
 
 final_pipe = Pipeline([
@@ -211,15 +194,15 @@ final_pipe = Pipeline([
     ('clf', final_clf)
 ])
 
-final_inner_cv = StratifiedKFold(n_splits=5, shuffle=True, random_state=42)
+final_inner_cv = RepeatedStratifiedKFold(n_splits=5, n_repeats=3, random_state=42)
 
 final_search = RandomizedSearchCV(
     estimator=final_pipe,
     param_distributions=param_grids[final_clf_type],
-    n_iter=100,
+    n_iter=50,
     cv=final_inner_cv,
     scoring='roc_auc',
-    refit=True,             # fits best model on full x_train_final after search
+    refit=True,             # fits best model on full x_train_final after search with best parameters: optimally trained model
     random_state=42,
     error_score=0
 )
@@ -239,10 +222,12 @@ print("Test F1:       ", metrics.f1_score(y_test, y_pred))
 print("Test Precision:", metrics.precision_score(y_test, y_pred))
 print("Test Recall:   ", metrics.recall_score(y_test, y_pred))
 
+#%%
 
 """"
 The full picture
-
+model selection -> what models will work the best
+     ↓
 nested CV  →  tells you expected generalisation performance (AUC ± std)
      ↓
 final RandomizedSearchCV on x_train_final  →  finds best hyperparameters
@@ -252,3 +237,4 @@ final_search.best_estimator_  →  your deployable model
 evaluate once on x_test_final  →  unbiased final performance estimate"
 
 """"
+# %%
