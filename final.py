@@ -1,11 +1,14 @@
 #%% Packages
+
 import numpy as np
 import pandas as pd
+from sklearn.metrics import RocCurveDisplay
+import matplotlib.pyplot as plt
 from scipy.stats import loguniform, randint
 from sklearn import metrics
 from sklearn.decomposition import PCA
 from sklearn.pipeline import Pipeline
-from sklearn.model_selection import cross_validate, StratifiedKFold, RandomizedSearchCV, train_test_split, RepeatedStratifiedKFold
+from sklearn.model_selection import cross_validate, StratifiedKFold, RandomizedSearchCV, train_test_split, RepeatedStratifiedKFold, learning_curve
 from sklearn.feature_selection import SelectKBest, f_classif, VarianceThreshold, SelectFromModel
 from sklearn.preprocessing import RobustScaler
 from sklearn.neighbors import KNeighborsClassifier
@@ -15,13 +18,14 @@ from sklearn.tree import DecisionTreeClassifier
 from worclipo.load_data import load_data
 
 #%% Loading the data and separating the test set from the train set
+
 data = load_data()
 x = data.drop(["label"], axis='columns').values
 y = data["label"].map({'lipoma':0, 'liposarcoma':1})
 x_train, x_test, y_train, y_test = train_test_split(x, y, test_size=0.15, random_state=42, stratify=y) # Stratified test split, random state for reproducability (42 can be any number), 85/15
 
-
 #%% Preprocessing (Broken feature removal & Robust scaling)
+
 # Preparation
 feature_names = data.drop(["label"], axis=1).columns
 x_train_df = pd.DataFrame(x_train, columns=feature_names)
@@ -68,10 +72,9 @@ selected_features = x_train_final.columns[selector.get_support()]
 x_train_final = pd.DataFrame(x_train_selected, columns=selected_features)
 x_test_final = pd.DataFrame(x_test_selected, columns=selected_features)
 
-print(f"Preprocessing and VarianceThreshold completed: {len(selected_features)} features remaining.")
+print(f"Preprocessing and VarianceThreshold completed: {len(selected_features)} features remaining."
 
-
-#%% Search Preparation
+#%% Search Preparation (Preparation of Feature Selections)
 
 rng = np.random.RandomState(42) # fixed seed for reproducability
 n_fs_samples = 10 # how many random feature selectors to generate per type
@@ -84,8 +87,8 @@ k_samples = rng.randint(k_min, k_max, size=n_fs_samples) # randomly generate k v
 kbest_options = [SelectKBest(f_classif, k=int(k)) for k in k_samples] # f_classif = T-test, loop for different k's, randomized search
 
 # PCA
-n_components_samples = rng.randint(2, 20, size=n_fs_samples)
-pca_options = [PCA(n_components=int(n)) for n in n_components_samples]
+n_components_samples = rng.randint(2, 20, size=n_fs_samples) # same bounds as for t-test
+pca_options = [PCA(n_components=int(n)) for n in n_components_samples] # generating multiple PCA FS options
 
 all_fs_options = kbest_options + pca_options + ['passthrough'] # pass-through makes no extra feature selection, only variance threshold of preprocessing is applied
 
@@ -94,7 +97,7 @@ clfs = [
     RandomForestClassifier(),
     GradientBoostingClassifier(),
     DecisionTreeClassifier(),
-    LogisticRegression(max_iter=10000, tol=1e-3)
+    LogisticRegression(max_iter=10000, tol=1e-3) # to allow convergence, max_iter is given
 ]
 
 param_grids = {
@@ -128,8 +131,8 @@ param_grids = {
     }
 }
 
-#%%
-# Nested Cross-validation Loop
+#%% Nested Cross-validation Loop
+
 scoring = {
     'accuracy': metrics.make_scorer(metrics.accuracy_score),
     'auc': metrics.make_scorer(metrics.roc_auc_score),
@@ -186,7 +189,8 @@ for clf in clfs:
     print()
 
 #%% Final model training
-final_clf = GradientBoostingClassifier()# Best performing model
+
+final_clf = GradientBoostingClassifier() # Best performing model
 final_clf_type = type(final_clf)
 
 final_pipe = Pipeline([
@@ -207,14 +211,33 @@ final_search = RandomizedSearchCV(
     error_score=0
 )
 
-# Fit on ALL training data
+# Fit on ALL training data (maximize data to fit to, maximalizes performance)
 final_search.fit(x_train_final, y_train)
 print("Best params:", final_search.best_params_)
 print("Final model AUC with best parameters:", final_search.best_score_)
 
+#%% Result of Final Model Training 
+
+final_model = GradientBoostingClassifier(
+    learning_rate=np.float64(0.01184431975182039), 
+    max_depth=2, 
+    min_samples_leaf=4, 
+    n_estimators=206, 
+    subsample=0.9
+)
+
+final_pipe = Pipeline([
+        ('fs', 'passthrough'), # placeholder, will be overwritten by RandomizedSearchCV
+        ('clf', final_model)
+    ])
+
+final_pipe.fit(x_train_final, y_train)
+print("Final model AUC:", final_search.best_score_)
+
 #%% Final evaluation on test set (only run once!)
-y_pred = final_search.predict(x_test_final)
-y_prob = final_search.predict_proba(x_test_final)[:,1] # Output is 2 columns, this selects only the column "prob_class_1", not class 0
+
+y_pred = final_pipe.predict(x_test_final)
+y_prob = final_pipe.predict_proba(x_test_final)[:,1] # Output is 2 columns, this selects only the column "prob_class_1", not class 0
 
 print("Test AUC:      ", metrics.roc_auc_score(y_test, y_prob))
 print("Test Accuracy: ", metrics.accuracy_score(y_test, y_pred))
@@ -222,19 +245,60 @@ print("Test F1:       ", metrics.f1_score(y_test, y_pred))
 print("Test Precision:", metrics.precision_score(y_test, y_pred))
 print("Test Recall:   ", metrics.recall_score(y_test, y_pred))
 
-#%%
+# %% ROC curve on the test set
 
-""""
-The full picture
-model selection -> what models will work the best
-     ↓
-nested CV  →  tells you expected generalisation performance (AUC ± std)
-     ↓
-final RandomizedSearchCV on x_train_final  →  finds best hyperparameters
-     ↓
-final_search.best_estimator_  →  your deployable model
-     ↓
-evaluate once on x_test_final  →  unbiased final performance estimate"
+y_prob = final_search.predict_proba(x_test_final)[:, 1]
 
-""""
-# %%
+fig, ax = plt.subplots(figsize=(8, 6))
+RocCurveDisplay.from_predictions(
+    y_test, y_prob,
+    name='GradientBoosting (test set)',
+    ax=ax
+)
+
+# Random classifier diagonal: Representation of random performance (guessing)
+ax.plot([0, 1], [0, 1], color='black', linestyle=':', alpha=0.5, label='Random classifier')
+ax.set_title('ROC Curve — GradientBoostingClassifier')
+ax.legend()
+plt.tight_layout()
+plt.show()
+
+# %% Learning Curve plot of the final model
+
+train_sizes, train_scores, val_scores = learning_curve(
+    final_pipe,
+    x_train_final, y_train,
+    cv=StratifiedKFold(n_splits=5, shuffle=True, random_state=42),
+    scoring='roc_auc',
+    train_sizes=np.linspace(0.1, 1.0, 10),  # 10 points from 10% to 100% of training data
+    n_jobs=-1
+)
+
+train_mean = train_scores.mean(axis=1)
+train_std  = train_scores.std(axis=1)
+val_mean   = val_scores.mean(axis=1)
+val_std    = val_scores.std(axis=1)
+
+fig, ax = plt.subplots(figsize=(8, 6))
+
+# Training score
+ax.plot(train_sizes, train_mean, label='Training AUC', color='blue')
+ax.fill_between(train_sizes,
+                train_mean - train_std,
+                train_mean + train_std,
+                alpha=0.15, color='blue')
+
+# Validation score
+ax.plot(train_sizes, val_mean, label='Validation AUC', color='green')
+ax.fill_between(train_sizes,
+                val_mean - val_std,
+                val_mean + val_std,
+                alpha=0.15, color='green')
+
+ax.set_xlabel('Training set size')
+ax.set_ylabel('AUC')
+ax.set_title('Learning Curve — GradientBoostingClassifier')
+ax.legend()
+ax.grid(True, alpha=0.3)
+plt.tight_layout()
+plt.show()
