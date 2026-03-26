@@ -16,9 +16,9 @@ Run the pipeline:
 python final.py
 
 # Authors
-Tjitske Pol
-Lars Jongsma
-Fleur Leenheer
+Tjitske Pol,
+Lars Jongsma,
+Fleur Leenheer &
 Janneke van Tilburg
 
 # Course
