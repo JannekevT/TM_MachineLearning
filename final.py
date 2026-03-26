@@ -1,21 +1,28 @@
-#%% Packages
-
+##########%% Packages
+from worclipo.load_data import load_data
 import numpy as np
 import pandas as pd
 from sklearn.metrics import RocCurveDisplay
 import matplotlib.pyplot as plt
 from scipy.stats import loguniform, randint
 from sklearn import metrics
+from sklearn.utils import resample
 from sklearn.decomposition import PCA
 from sklearn.pipeline import Pipeline
 from sklearn.model_selection import cross_validate, StratifiedKFold, RandomizedSearchCV, train_test_split, RepeatedStratifiedKFold, learning_curve
-from sklearn.feature_selection import SelectKBest, f_classif, VarianceThreshold, SelectFromModel
+from sklearn.feature_selection import SelectKBest, f_classif, VarianceThreshold
 from sklearn.preprocessing import RobustScaler
-from sklearn.neighbors import KNeighborsClassifier
-from sklearn.ensemble import GradientBoostingClassifier, RandomForestClassifier
+
+# Classifiers
+from sklearn.naive_bayes import GaussianNB
+from sklearn.discriminant_analysis import LinearDiscriminantAnalysis
+from sklearn.discriminant_analysis import QuadraticDiscriminantAnalysis
 from sklearn.linear_model import LogisticRegression
+from sklearn.linear_model import SGDClassifier
+from sklearn.svm import SVC, NuSVC
 from sklearn.tree import DecisionTreeClassifier
-from worclipo.load_data import load_data
+from sklearn.neighbors import KNeighborsClassifier
+from sklearn.ensemble import GradientBoostingClassifier, RandomForestClassifier, AdaBoostClassifier
 
 #%% Loading the data and separating the test set from the train set
 
@@ -72,7 +79,7 @@ selected_features = x_train_final.columns[selector.get_support()]
 x_train_final = pd.DataFrame(x_train_selected, columns=selected_features)
 x_test_final = pd.DataFrame(x_test_selected, columns=selected_features)
 
-print(f"Preprocessing and VarianceThreshold completed: {len(selected_features)} features remaining."
+print(f"Preprocessing and VarianceThreshold completed: {len(selected_features)} features remaining.")
 
 #%% Search Preparation (Preparation of Feature Selections)
 
@@ -82,7 +89,7 @@ n_features = x_train_final.shape[1]
 
 # T-test feature selection
 k_min = int(2) # Lower bound 
-k_max = int(20) # Upper bound, rule of thumb is n_features < n_samples / 10 --> 12 or sqrt(115)=11
+k_max = int(20) # Upper bound, rule of thumb is n_features < n_samples / 10 --> 12, or sqrt(n_samples)=sqrt(115)=11
 k_samples = rng.randint(k_min, k_max, size=n_fs_samples) # randomly generate k values within defined range (random search)
 kbest_options = [SelectKBest(f_classif, k=int(k)) for k in k_samples] # f_classif = T-test, loop for different k's, randomized search
 
@@ -92,12 +99,82 @@ pca_options = [PCA(n_components=int(n)) for n in n_components_samples] # generat
 
 all_fs_options = kbest_options + pca_options + ['passthrough'] # pass-through makes no extra feature selection, only variance threshold of preprocessing is applied
 
+#%% Recon Model Selection
+
+recon_clfs = [
+    LinearDiscriminantAnalysis(solver='eigen', shrinkage=True), # Otherwise while running constant error, this is suggested for situation where param > n_samples
+    QuadraticDiscriminantAnalysis(solver='eigen', shrinkage=True),
+    GaussianNB(),
+    LogisticRegression(random_state=42, max_iter=10000, tol=1e-3), # no hyperparameters, simply allows convergence
+    SGDClassifier(random_state=42),
+    SVC(random_state=42),
+    NuSVC(random_state=42),
+    DecisionTreeClassifier(random_state=42),
+    KNeighborsClassifier(),
+    RandomForestClassifier(random_state=42), 
+    GradientBoostingClassifier(random_state=42), 
+    AdaBoostClassifier(random_state=42)
+    ]
+
+scoring = {
+    'accuracy': metrics.make_scorer(metrics.accuracy_score),
+    'auc': metrics.make_scorer(metrics.roc_auc_score),
+    'f1': metrics.make_scorer(metrics.f1_score),
+    'precision': metrics.make_scorer(metrics.precision_score),
+    'recall': metrics.make_scorer(metrics.recall_score)
+}
+
+recon_results = {}
+
+for clf in recon_clfs:
+    clf_type = type(clf)
+
+    pipe = Pipeline([
+        ('fs', 'passthrough'), # placeholder, will be overwritten by RandomizedSearchCV
+        ('clf', clf)
+    ])
+
+    inner_cv = StratifiedKFold(n_splits=5, shuffle=True, random_state=42) # 5-fold, shuffles the order of the data before splitting, with reproducability
+    outer_cv = StratifiedKFold(n_splits=5, shuffle=True, random_state=42) 
+
+    search = RandomizedSearchCV(
+        estimator=pipe,
+        param_distributions={'fs': all_fs_options},
+        n_iter=21, # Nr. of times repeated, equal to parameter grid (only 10 SelectK, 10 PCA and 1 passthrough option)
+        cv=inner_cv,
+        scoring='roc_auc', # roc_auc is the most complete metric, which includes both specificity and sensitivity, making it the best for hyperparameter optimalization
+        random_state=42,
+        error_score=0    
+        )
+
+    cv_results = cross_validate(
+        search,
+        x_train_final, y=y_train,
+        cv=outer_cv,
+        scoring=scoring,
+        return_train_score=False,   # Not relevant
+    )
+
+    recon_results[type(clf).__name__] = {
+        metric.replace('test_', ''): (cv_results[metric].mean(), cv_results[metric].std())
+        for metric in ['test_accuracy', 'test_auc', 'test_f1', 'test_precision', 'test_recall']
+    }
+
+# Print ranked by AUC
+print("Reconnaissance CV results (ranked by AUC):")
+print("-" * 50)
+sorted_results = sorted(recon_results.items(), key=lambda x: x[1]['auc'][0], reverse=True)
+for name, metrics_dict in sorted_results:
+    print(f"\n{name}")
+    for metric, (mean, std) in metrics_dict.items():
+        print(f"  {metric}: {mean:.3f} ± {std:.3f}")
+
+#%% Hyperparameter set for optimalization of selected models
 
 clfs = [
-    RandomForestClassifier(),
-    GradientBoostingClassifier(),
-    DecisionTreeClassifier(),
-    LogisticRegression(max_iter=10000, tol=1e-3) # to allow convergence, max_iter is given
+    RandomForestClassifier(random_state=42),
+    GradientBoostingClassifier(random_state=42),
+    LogisticRegression(random_state=42, max_iter=10000, tol=1e-3) # to allow convergence, max_iter is given
 ]
 
 param_grids = {
@@ -107,31 +184,24 @@ param_grids = {
         'clf__max_depth': randint(2, 6),            # Standard=None
         'clf__min_samples_split': randint(8, 20),   # Standard=2
         'clf__min_samples_leaf' : randint(3, 10),   # Standard=1
-        'clf__max_features': ['sqrt', 'log2']    
+        'clf__max_features': ['sqrt', 'log2']       # Standard=sqrt
     },
     GradientBoostingClassifier: {
         'fs': all_fs_options,
-        'clf__n_estimators': randint(100, 250),
-        'clf__learning_rate': loguniform(0.001, 0.05),
-        'clf__max_depth': randint(2, 6),
-        'clf__subsample': [0.5, 0.6, 0.7, 0.8, 0.9, 1.0],               #standard=1, can only accept 1 decimal numbers, so this acts as rand(0.5, 1)
-        'clf__min_samples_leaf': randint(2, 5)
+        'clf__n_estimators': randint(100, 250),             # Standard=100  
+        'clf__learning_rate': loguniform(0.001, 0.05),      # Standard=0.1
+        'clf__max_depth': randint(2, 6),                    # Standard=3
+        'clf__subsample': [0.5, 0.6, 0.7, 0.8, 0.9, 1.0],   # Standard=1, can only accept 1 decimal numbers, so this acts as rand(0.5, 1)
+        'clf__min_samples_leaf': randint(2, 5)              # Standard=1
     },
-    DecisionTreeClassifier: {
-        'fs': all_fs_options,
-        'clf__max_depth': randint(2, 5),             #Standard=None
-        'clf__min_samples_split': randint(8, 20),
-        'clf__min_samples_leaf': randint(5, 12),        #standard=1
-        'clf__criterion': ['gini', 'entropy']
-    },  
     LogisticRegression: {
         'fs': all_fs_options,
-        'clf__C': loguniform(0.1, 10),             # Standard=1
-        'clf__solver': ['saga']
+        'clf__C': loguniform(0.1, 10),  # Standard=1
+        'clf__solver': ['saga']         # Standard=lbfgs, but struggled too much with high dimensional data, therefore saga was chosen
     }
 }
 
-#%% Nested Cross-validation Loop
+#%% Nested Cross-validation Loop for hyperparameter optimization
 
 scoring = {
     'accuracy': metrics.make_scorer(metrics.accuracy_score),
@@ -160,7 +230,7 @@ for clf in clfs:
         estimator=pipe,
         param_distributions=param_grid,
         n_iter=100, # Nr. of times repeated
-        cv=inner_cv, 
+        cv=inner_cv,
         scoring='roc_auc', # roc_auc is the most complete metric, which includes both specificity and sensitivity, making it the best for hyperparameter optimalization
         random_state=42,
         error_score=0 # if LogReg produces 0 features, score 0 rather than crash
@@ -188,9 +258,9 @@ for clf in clfs:
         print(f"  {metric.replace('test_', '')}: {mean:.3f} ± {std:.3f}")
     print()
 
-#%% Final model training
+#%% Final model training 
 
-final_clf = GradientBoostingClassifier() # Best performing model
+final_clf = GradientBoostingClassifier(random_state=42) # Best performing model
 final_clf_type = type(final_clf)
 
 final_pipe = Pipeline([
@@ -198,13 +268,13 @@ final_pipe = Pipeline([
     ('clf', final_clf)
 ])
 
-final_inner_cv = RepeatedStratifiedKFold(n_splits=5, n_repeats=3, random_state=42)
+final_cv = RepeatedStratifiedKFold(n_splits=5, n_repeats=3, random_state=42)
 
 final_search = RandomizedSearchCV(
     estimator=final_pipe,
     param_distributions=param_grids[final_clf_type],
-    n_iter=50,
-    cv=final_inner_cv,
+    n_iter=100,
+    cv=final_cv,
     scoring='roc_auc',
     refit=True,             # fits best model on full x_train_final after search with best parameters: optimally trained model
     random_state=42,
@@ -213,37 +283,50 @@ final_search = RandomizedSearchCV(
 
 # Fit on ALL training data (maximize data to fit to, maximalizes performance)
 final_search.fit(x_train_final, y_train)
+
+# Results
+best_index = final_search.best_index_
+mean_auc = final_search.cv_results_['mean_test_score'][best_index]
+std_auc = final_search.cv_results_['std_test_score'][best_index]
+
 print("Best params:", final_search.best_params_)
-print("Final model AUC with best parameters:", final_search.best_score_)
+print(f"Final model AUC (Mean CV): {mean_auc:.3f} (+/- {std_auc:.3f})")
 
-#%% Result of Final Model Training 
+#%% Final evaluation on test set, with bootstrapping for CI 
 
-final_model = GradientBoostingClassifier(
-    learning_rate=np.float64(0.01184431975182039), 
-    max_depth=2, 
-    min_samples_leaf=4, 
-    n_estimators=206, 
-    subsample=0.9
-)
+y_pred = final_search.predict(x_test_final)
+y_prob = final_search.predict_proba(x_test_final)[:,1] # Output is 2 columns, this selects only the column "prob_class_1", not class 0
 
-final_pipe = Pipeline([
-        ('fs', 'passthrough'), # placeholder, will be overwritten by RandomizedSearchCV
-        ('clf', final_model)
-    ])
+n_bootstraps = 1000
+stats = {'auc': [], 'acc': [], 'f1': [], 'prec': [], 'rec': []}
 
-final_pipe.fit(x_train_final, y_train)
-print("Final model AUC:", final_search.best_score_)
+for i in range(n_bootstraps):
+    # Resample test set with replacement
+    indices = resample(range(len(y_test)), random_state=i) # random_state=i guarantees a different random_state every bootstrap
+    y_test_boot = np.array(y_test)[indices]
+    y_prob_boot = y_prob[indices]
+    y_pred_boot = y_pred[indices]
 
-#%% Final evaluation on test set (only run once!)
+    # Skip if only one class present in resample
+    if len(np.unique(y_test_boot)) < 2:
+        continue
+        
+    stats['auc'].append(metrics.roc_auc_score(y_test_boot, y_prob_boot))
+    stats['acc'].append(metrics.accuracy_score(y_test_boot, y_pred_boot))
+    stats['f1'].append(metrics.f1_score(y_test_boot, y_pred_boot))
+    stats['prec'].append(metrics.precision_score(y_test_boot, y_pred_boot))
+    stats['rec'].append(metrics.recall_score(y_test_boot, y_pred_boot))
 
-y_pred = final_pipe.predict(x_test_final)
-y_prob = final_pipe.predict_proba(x_test_final)[:,1] # Output is 2 columns, this selects only the column "prob_class_1", not class 0
+def print_ci(name, scores, original_score):
+    lower = np.percentile(scores, 2.5)
+    upper = np.percentile(scores, 97.5)
+    print(f"Test {name}: {original_score:.3f} | 95% CI: [{lower:.3f} - {upper:.3f}]")
 
-print("Test AUC:      ", metrics.roc_auc_score(y_test, y_prob))
-print("Test Accuracy: ", metrics.accuracy_score(y_test, y_pred))
-print("Test F1:       ", metrics.f1_score(y_test, y_pred))
-print("Test Precision:", metrics.precision_score(y_test, y_pred))
-print("Test Recall:   ", metrics.recall_score(y_test, y_pred))
+print_ci("AUC", stats['auc'], metrics.roc_auc_score(y_test, y_prob))
+print_ci("Accuracy", stats['acc'], metrics.accuracy_score(y_test, y_pred))
+print_ci("F1", stats['f1'], metrics.f1_score(y_test, y_pred))
+print_ci("Precision", stats['prec'], metrics.precision_score(y_test, y_pred))
+print_ci("Recall", stats['rec'], metrics.recall_score(y_test, y_pred))
 
 # %% ROC curve on the test set
 
@@ -257,7 +340,7 @@ RocCurveDisplay.from_predictions(
 )
 
 # Random classifier diagonal: Representation of random performance (guessing)
-ax.plot([0, 1], [0, 1], color='black', linestyle=':', alpha=0.5, label='Random classifier')
+ax.plot([0, 1], [0, 1], color='black', linestyle=':', alpha=0.5, label='Random classifier (AUC = 0.5)')
 ax.set_title('ROC Curve — GradientBoostingClassifier')
 ax.legend()
 plt.tight_layout()
@@ -271,7 +354,8 @@ train_sizes, train_scores, val_scores = learning_curve(
     cv=StratifiedKFold(n_splits=5, shuffle=True, random_state=42),
     scoring='roc_auc',
     train_sizes=np.linspace(0.1, 1.0, 10),  # 10 points from 10% to 100% of training data
-    n_jobs=-1
+    n_jobs=-1,                               # Faster plot generation
+    random_state=42
 )
 
 train_mean = train_scores.mean(axis=1)
@@ -302,3 +386,4 @@ ax.legend()
 ax.grid(True, alpha=0.3)
 plt.tight_layout()
 plt.show()
+# %%

@@ -1,6 +1,5 @@
 #%%
 from worclipo.load_data import load_data
-from sklearn.model_selection import 
 
 # General packages
 import numpy as np
