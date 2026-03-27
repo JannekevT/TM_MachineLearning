@@ -1,4 +1,4 @@
-##########%% Packages
+#%% Packages
 from worclipo.load_data import load_data
 import numpy as np
 import pandas as pd
@@ -32,7 +32,6 @@ y = data["label"].map({'lipoma':0, 'liposarcoma':1})
 x_train, x_test, y_train, y_test = train_test_split(x, y, test_size=0.15, random_state=42, stratify=y) # Stratified test split, random state for reproducability (42 can be any number), 85/15
 
 #%% Preprocessing (Broken feature removal & Robust scaling)
-
 # Preparation
 feature_names = data.drop(["label"], axis=1).columns
 x_train_df = pd.DataFrame(x_train, columns=feature_names)
@@ -332,7 +331,7 @@ print_ci("Recall", stats['rec'], metrics.recall_score(y_test, y_pred))
 
 y_prob = final_search.predict_proba(x_test_final)[:, 1]
 
-fig, ax = plt.subplots(figsize=(8, 6))
+fig, ax = plt.subplots(figsize=(6, 4))
 RocCurveDisplay.from_predictions(
     y_test, y_prob,
     name='GradientBoosting (test set)',
@@ -363,7 +362,7 @@ train_std  = train_scores.std(axis=1)
 val_mean   = val_scores.mean(axis=1)
 val_std    = val_scores.std(axis=1)
 
-fig, ax = plt.subplots(figsize=(8, 6))
+fig, ax = plt.subplots(figsize=(6, 4))
 
 # Training score
 ax.plot(train_sizes, train_mean, label='Training AUC', color='blue')
